@@ -1,9 +1,13 @@
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+// Verificar se as variáveis de ambiente existem
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// Criar cliente apenas se as variáveis existirem
+export const supabase = supabaseUrl && supabaseAnonKey 
+  ? createClient(supabaseUrl, supabaseAnonKey)
+  : null
 
 // Tipos para o banco de dados
 export interface SupabaseUsuario {
@@ -64,29 +68,85 @@ export interface SupabaseBanner {
 
 // Funções de inicialização das tabelas
 export const initializeTables = async () => {
+  if (!supabase) {
+    console.log('⚠️ Supabase não configurado - usando modo offline')
+    return
+  }
+
   try {
-    // Criar tabela de usuários
-    const { error: usuariosError } = await supabase.rpc('create_usuarios_table')
-    if (usuariosError && !usuariosError.message.includes('already exists')) {
-      console.log('Criando tabela usuarios via SQL direto...')
-    }
+    // Criar tabelas usando SQL direto
+    const queries = [
+      `
+      CREATE TABLE IF NOT EXISTS usuarios (
+        id TEXT PRIMARY KEY,
+        nome TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        senha TEXT NOT NULL,
+        tipo TEXT CHECK (tipo IN ('admin', 'usuario')) DEFAULT 'usuario',
+        ativo BOOLEAN DEFAULT true,
+        data_cadastro TEXT NOT NULL,
+        ultimo_acesso TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      `,
+      `
+      CREATE TABLE IF NOT EXISTS clientes (
+        id TEXT PRIMARY KEY,
+        nome TEXT NOT NULL,
+        whatsapp TEXT NOT NULL,
+        plano TEXT NOT NULL,
+        status TEXT CHECK (status IN ('ativo', 'inativo', 'suspenso', 'vencido')) DEFAULT 'ativo',
+        data_vencimento TEXT NOT NULL,
+        valor_mensal DECIMAL(10,2) DEFAULT 0,
+        data_ultimo_pagamento TEXT,
+        observacoes TEXT,
+        data_cadastro TEXT NOT NULL,
+        usuario_id TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      `,
+      `
+      CREATE TABLE IF NOT EXISTS servidores (
+        id TEXT PRIMARY KEY,
+        nome TEXT NOT NULL,
+        link TEXT NOT NULL,
+        descricao TEXT,
+        ativo BOOLEAN DEFAULT true,
+        data_criacao TEXT NOT NULL,
+        usuario_id TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      `,
+      `
+      CREATE TABLE IF NOT EXISTS banners (
+        id TEXT PRIMARY KEY,
+        categoria TEXT CHECK (categoria IN ('filme', 'serie', 'esporte')) NOT NULL,
+        imagem_url TEXT NOT NULL,
+        logo_url TEXT,
+        sinopse TEXT,
+        data_evento TEXT,
+        logo_personalizada TEXT,
+        posicao_logo TEXT CHECK (posicao_logo IN ('direita', 'centro')),
+        data_criacao TEXT NOT NULL,
+        usuario_id TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      `
+    ]
 
-    // Criar tabela de clientes
-    const { error: clientesError } = await supabase.rpc('create_clientes_table')
-    if (clientesError && !clientesError.message.includes('already exists')) {
-      console.log('Criando tabela clientes via SQL direto...')
-    }
-
-    // Criar tabela de servidores
-    const { error: servidoresError } = await supabase.rpc('create_servidores_table')
-    if (servidoresError && !servidoresError.message.includes('already exists')) {
-      console.log('Criando tabela servidores via SQL direto...')
-    }
-
-    // Criar tabela de banners
-    const { error: bannersError } = await supabase.rpc('create_banners_table')
-    if (bannersError && !bannersError.message.includes('already exists')) {
-      console.log('Criando tabela banners via SQL direto...')
+    for (const query of queries) {
+      try {
+        const { error } = await supabase.rpc('exec_sql', { sql: query })
+        if (error && !error.message.includes('already exists')) {
+          console.log('Tentando criar tabela via query direta...')
+        }
+      } catch (err) {
+        console.log('Tabela pode já existir:', err)
+      }
     }
 
     console.log('✅ Tabelas inicializadas no Supabase')
@@ -97,10 +157,20 @@ export const initializeTables = async () => {
 
 // Classe para gerenciar dados no Supabase
 export class SupabaseAPI {
+  // Verificar se Supabase está disponível
+  private static isAvailable(): boolean {
+    return supabase !== null
+  }
+
   // Usuários
   static async salvarUsuario(usuario: SupabaseUsuario): Promise<boolean> {
+    if (!this.isAvailable()) {
+      console.log('⚠️ Supabase não disponível - dados salvos apenas localmente')
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('usuarios')
         .upsert({
           id: usuario.id,
@@ -127,8 +197,12 @@ export class SupabaseAPI {
   }
 
   static async carregarUsuarios(): Promise<SupabaseUsuario[]> {
+    if (!this.isAvailable()) {
+      return []
+    }
+
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabase!
         .from('usuarios')
         .select('*')
         .order('created_at', { ascending: false })
@@ -146,8 +220,12 @@ export class SupabaseAPI {
   }
 
   static async atualizarUsuario(id: string, dados: Partial<SupabaseUsuario>): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('usuarios')
         .update(dados)
         .eq('id', id)
@@ -166,8 +244,12 @@ export class SupabaseAPI {
   }
 
   static async excluirUsuario(id: string): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('usuarios')
         .delete()
         .eq('id', id)
@@ -187,8 +269,12 @@ export class SupabaseAPI {
 
   // Clientes
   static async salvarCliente(cliente: SupabaseCliente): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('clientes')
         .upsert({
           id: cliente.id,
@@ -218,8 +304,12 @@ export class SupabaseAPI {
   }
 
   static async carregarClientes(): Promise<SupabaseCliente[]> {
+    if (!this.isAvailable()) {
+      return []
+    }
+
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabase!
         .from('clientes')
         .select('*')
         .order('created_at', { ascending: false })
@@ -237,8 +327,12 @@ export class SupabaseAPI {
   }
 
   static async atualizarCliente(id: string, dados: Partial<SupabaseCliente>): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('clientes')
         .update(dados)
         .eq('id', id)
@@ -257,8 +351,12 @@ export class SupabaseAPI {
   }
 
   static async excluirCliente(id: string): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('clientes')
         .delete()
         .eq('id', id)
@@ -278,8 +376,12 @@ export class SupabaseAPI {
 
   // Servidores
   static async salvarServidor(servidor: SupabaseServidor): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('servidores')
         .upsert({
           id: servidor.id,
@@ -305,8 +407,12 @@ export class SupabaseAPI {
   }
 
   static async carregarServidores(): Promise<SupabaseServidor[]> {
+    if (!this.isAvailable()) {
+      return []
+    }
+
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabase!
         .from('servidores')
         .select('*')
         .order('created_at', { ascending: false })
@@ -324,8 +430,12 @@ export class SupabaseAPI {
   }
 
   static async atualizarServidor(id: string, dados: Partial<SupabaseServidor>): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('servidores')
         .update(dados)
         .eq('id', id)
@@ -344,8 +454,12 @@ export class SupabaseAPI {
   }
 
   static async excluirServidor(id: string): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('servidores')
         .delete()
         .eq('id', id)
@@ -365,8 +479,12 @@ export class SupabaseAPI {
 
   // Banners
   static async salvarBanner(banner: SupabaseBanner): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('banners')
         .upsert({
           id: banner.id,
@@ -395,8 +513,12 @@ export class SupabaseAPI {
   }
 
   static async carregarBanners(): Promise<SupabaseBanner[]> {
+    if (!this.isAvailable()) {
+      return []
+    }
+
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabase!
         .from('banners')
         .select('*')
         .order('created_at', { ascending: false })
@@ -414,8 +536,12 @@ export class SupabaseAPI {
   }
 
   static async excluirBanner(id: string): Promise<boolean> {
+    if (!this.isAvailable()) {
+      return false
+    }
+
     try {
-      const { error } = await supabase
+      const { error } = await supabase!
         .from('banners')
         .delete()
         .eq('id', id)
@@ -435,8 +561,12 @@ export class SupabaseAPI {
 
   // Autenticação
   static async autenticar(email: string, senha: string): Promise<SupabaseUsuario | null> {
+    if (!this.isAvailable()) {
+      return null
+    }
+
     try {
-      const { data, error } = await supabase
+      const { data, error } = await supabase!
         .from('usuarios')
         .select('*')
         .eq('email', email)
@@ -467,6 +597,10 @@ export class SupabaseAPI {
     servidores: SupabaseServidor[]
     banners: SupabaseBanner[]
   }> {
+    if (!this.isAvailable()) {
+      return { usuarios: [], clientes: [], servidores: [], banners: [] }
+    }
+
     try {
       const [usuarios, clientes, servidores, banners] = await Promise.all([
         this.carregarUsuarios(),
